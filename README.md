@@ -11,5 +11,6 @@ Preliminary Autism Screening APP.
 
 
 ### Reference:
+Thabtah, Fadi, Firuz Kamalov, and Khairan Rajab. "A new computational intelligence approach to detect autistic features for autism screening." International journal of medical informatics 117 (2018): 112-124.
 
 
