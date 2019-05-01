@@ -1,0 +1,73 @@
+---
+title: "Applied Data Science:  Midterm Project"
+author: "Zhaoyang Wang, Wei Dai, Yuyao Tang"
+date: ""
+output:
+  prettydoc::html_pretty:
+  theme: cayman
+highlight: github
+---
+
+```{r setup, include=FALSE}
+set.seed(72)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+## **1 Introduction**
+
+
+## **2 Methods**
+### **2.2 Feature Selection Algorithms**
+#### **2.2.1 Chi-square**
+Chi-square computes the correlation between the variable and the class.
+
+
+### **2.3 Machine Learning Methods**
+
+#### **2.3.3 Weighted k-Nearest Neighbors**
+Standard k-Nearest Neighbors (k-NN) method is to determine the prediction for new data according to their nearest neighbors in the training data. Given a positive integer $k$, the kNN classifier first looks for the $k$ points closest to the point $x_0$, which can be presented as $N_0$. Then the point $x_0$ is considered to have the following conditional probability [7]:
+$$\Pr (Y=j|X=x_0)=\frac{1}{k}\sum_{i\in N_0}I(y_i=j)$$
+
+Then, the point will be classified to a specific class that have the maximum number of nearest neighbors to it.
+
+Weighted distance kNN is a refinement of the standard kNN [8]. It weights the nearest neighbors according to their distance to the test data point. The closer of the neighbors to the test point, the greater the weight of the neighbors. In this case, the conditional probability is changed to:
+$$\Pr (Y=j|X=x_0)=\frac{\sum_{i\in N_0}w_iI(y_i=j)}{\sum_{i\in N_0}w_i}$$
+The weight is determined by the kernel of the classifier. The standard kNN can be seen as kNN with rectangular kernel. In this study, we also used triangular kernel and biweight (beta distribution, $beta(3,3)$) kernel. These kernels put more weights on the closer data points as shown in **Figure 3**.
+
+<center>
+
+![Figure 3. Rectangular, Triangular, and Biweight kernel function](../img/knn_kernel.png){width=50%}
+
+</center>
+
+
+### **2.8 Ensemble Model**
+Ensemble methods are meta-algorithms that combine several machine learning techniques into one predictive model which results in better predictive performance compared to a single model. At this time, we combine the predictions from the other three methods, i.e., Logistic regression with Ridge, decision tree, and kNN, to form a new feature-space for the data. Then, we will employ the best method among these three to perform the ensemble learning.
+
+
+
+
+
+
+# References
+1. Xiao H, Rasul K, Vollgraf R. Fashion-mnist: a novel image dataset for benchmarking machine learning algorithms[J]. arXiv preprint arXiv:1708.07747, 2017.
+
+2. Jason Brownlee, Sep 9 2016, A Gentle Introduction to the Gradient Boosting Algorithm for Machine Learning, https://machinelearningmastery.com/gentle-introduction-gradient-boosting-algorithm-machine-learning/
+
+3. Leo Breiman,2001,RANDOM FORESTS, https://www.stat.berkeley.edu/~breiman/randomforest2001.pdf
+
+4. James, Gareth, et al. An Introduction to Statistical Learning: with Applications in R. Springer, 2014.
+
+5. Rosenblatt, Frank. x. Principles of Neurodynamics: Perceptrons and the Theory of Brain Mechanisms. Spartan Books, Washington DC, 1961
+
+6. Srivastava N, Hinton G, Krizhevsky A, et al. Dropout: a simple way to prevent neural networks from overfitting[J]. The Journal of Machine Learning Research, 2014, 15(1): 1929-1958.
+
+7. Altman, N. S. (1992). "An introduction to kernel and nearest-neighbor nonparametric regression". The American Statistician. 46 (3): 175–185. 
+
+8. Hechenbichler K, Schliep K. Weighted k-nearest-neighbor techniques and ordinal classification[J]. 2004.
+
+9. https://en.wikipedia.org/wiki/Ensemble_learning
+
+10. Goodfellow, Ian, Yoshua Bengio, and Aaron Courville. Deep learning. MIT press, 2016.
+
+

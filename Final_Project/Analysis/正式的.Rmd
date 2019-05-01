@@ -1,0 +1,580 @@
+---
+title: "Impact of Feature Selection and Ensemble Model on Autism Screening"
+author: "Yutao Tang"
+date: ""
+output:
+  prettydoc::html_pretty:
+  theme: architect
+highlight: github
+---
+
+```{r setup, include=FALSE}
+set.seed(72)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+```{r libraries, echo = FALSE}
+library(RWeka)
+library(data.table)
+library(DT)
+library(FSelector)
+library(kknn)
+library(caret)
+library(plyr)
+library(recharts)
+library(glmnet)
+library(C50)
+
+```
+
+```{r functions}
+formula.eliminate.fold.class <- function(outcome.name, input.names){
+  input.names.delineated=setdiff(input.names,c("fold","Class/ASD","order.index"))
+  the.formula <- sprintf("`%s` ~ %s", outcome.name, paste(input.names.delineated, collapse = "+"))
+  
+  return(as.formula(the.formula))
+}
+
+knn.fit <- function(dat, kernel="triangular", k=6, outcome.name="Class/ASD", input.names, seed=2019){
+  set.seed(seed = seed)
+  folds <- createFolds(y = dat$`Class/ASD`, k = 10, list = F)
+  dat$fold = folds
+  acc=rep(0,10)
+  sensitivity=rep(0,10)
+  all.pred=c()
+  order.index=c()
+
+  the.formula=formula.eliminate.fold.class(outcome.name, input.names)
+  
+  for(i in 1:10){
+    test.mask=which(dat$fold==i)
+    adult.test=dat[test.mask,]
+    adult.train=dat[-test.mask,]
+    
+    knn.fit=kknn(the.formula, adult.train, test=adult.test, 
+                 kernel=kernel, k=k)
+    knn.pred=fitted(knn.fit)
+    metrics=confusionMatrix(knn.pred, adult.test$`Class/ASD`)
+    acc[i]=metrics[["overall"]][["Accuracy"]]
+    # sensitivity[i]=metrics[["byClass"]][["Sensitivity"]]
+    sensitivity[i]=metrics[["table"]][4]/(metrics[["table"]][3]+metrics[["table"]][4])
+    all.pred=c(all.pred,knn.pred) # Will conver to number. If levels are "YES","NO -> 1,2
+    order.index=c(order.index,test.mask)
+  }
+  all.pred=as.factor(all.pred)
+  levels(all.pred)<-c("NO","YES")
+  predictions=cbind.data.frame(order.index, all.pred)
+  list_data=list(acc,sensitivity,predictions)
+  names(list_data) <- c("Accuracy","Sensitivity","Predictions")
+  return(list_data)
+}
+
+Ridge.fit<-function(dat,outcome.name="Class/ASD",input.names,seed=2019){
+  set.seed(seed)
+  folds <- createFolds(y = dat$`Class/ASD`, k = 10, list = F)
+  dat$fold<-folds
+  acc=rep(0,10)
+  sensitivity=rep(0,10)
+  all.pred=c()
+  order.index=c()
+  
+  for(i in 1:10){
+    test.mask=which(dat$fold==i)
+    adult.test=dat[test.mask,]
+    adult.train=dat[-test.mask,]
+    if (ncol(dat)<7){
+      select.col=setdiff(input.names,c("fold","Class/ASD","order.index"))
+      adult.train1<-adult.train[,select.col]
+      adult.test1<-adult.test[,select.col]
+      } else {
+        adult.train1<-adult.train[,-c(18,19)]
+        adult.test1<-adult.test[,-c(18,19)]
+        adult.train1<-subset(adult.train1,select =input.names)
+        adult.test1<-subset(adult.test1,select =input.names)}
+    traindf<-as.matrix(as.data.frame(lapply(adult.train1, as.numeric)))
+    testdf<-as.matrix(as.data.frame(lapply(adult.test1, as.numeric)))
+    mod.cv<-cv.glmnet(x = traindf, y = adult.train$`Class/ASD`, family = "binomial",alpha =0)
+    pred <- predict(object = mod.cv, newx =testdf, type = "class", s = mod.cv$lambda.min) 
+    pred=factor(pred, levels=c("NO","YES"))
+    metrics=confusionMatrix(pred, adult.test$`Class/ASD`)
+    acc[i]=metrics[["overall"]][["Accuracy"]]
+    sensitivity[i]=metrics[["table"]][4]/(metrics[["table"]][3]+metrics[["table"]][4])
+    all.pred=c(all.pred,pred)
+    order.index=c(order.index,test.mask)
+  }
+  all.pred=as.factor(all.pred)
+  levels(all.pred)<-c("NO","YES")
+  predictions=cbind.data.frame(order.index, all.pred)
+  list_data=list(acc,sensitivity,predictions)
+  names(list_data) <- c("Accuracy","Sensitivity","Predictions")
+  return(list_data)
+}
+
+Decisiontree.fit<-function(dat,outcome.name="Class/ASD",input.names,seed=2019){
+  set.seed(seed)
+  folds <- createFolds(y = dat$`Class/ASD`, k = 10, list = F)
+  dat$fold<-folds
+  acc=rep(0,10)
+  sensitivity=rep(0,10)
+  all.pred=c()
+  order.index=c()
+  for(i in 1:10){
+    test.mask=which(dat$fold==i)
+    adult.test=dat[test.mask,]
+    adult.train=dat[-test.mask,]
+    if (ncol(dat)<7){
+      select.col=setdiff(input.names,c("fold","Class/ASD","order.index"))
+      adult.train1<-adult.train[,select.col]
+      adult.test1<-adult.test[,select.col]
+      } else {
+        adult.train1<-adult.train[,-c(18,19)]
+        adult.test1<-adult.test[,-c(18,19)]
+        adult.train1<-subset(adult.train1,select =input.names)
+        adult.test1<-subset(adult.test1,select =input.names)}
+    mytree<-C5.0(x=adult.train1,y=adult.train$`Class/ASD`)
+    pred<-predict(object =mytree,newdata = adult.test1)
+    metrics=confusionMatrix(pred, adult.test$`Class/ASD`)
+    acc[i]=metrics[["overall"]][["Accuracy"]]
+    sensitivity[i]=metrics[["table"]][4]/(metrics[["table"]][3]+metrics[["table"]][4])
+    all.pred=c(all.pred,pred)
+    order.index=c(order.index,test.mask)
+  }
+  all.pred=as.factor(all.pred)
+  levels(all.pred)<-c("NO","YES")
+  predictions=cbind.data.frame(order.index, all.pred)
+  list_data=list(acc,sensitivity,predictions)
+  names(list_data) <- c("Accuracy","Sensitivity","Predictions")
+  return(list_data)
+}
+
+
+chi.square.feat.selec <- function(dat,the.formula,cutoff.perc=0.5){
+  chi.sq.weights <- FSelector::chi.squared(the.formula, dat) # setorder(adult.weights.chi.sq)
+  chi.square.vars=cutoff.k.percent(chi.sq.weights, cutoff.perc)
+  return(chi.square.vars)
+}
+
+ig.feat.selec <- function(dat,the.formula,cutoff.perc=0.5){
+  ig.weights <- FSelector::information.gain(the.formula, dat, unit = "log2")
+  ig.vars=cutoff.k.percent(ig.weights, cutoff.perc)
+  return(ig.vars)
+}
+
+oneR.feat.selec <- function(dat,the.formula,cutoff.perc=0.5){
+  oneR.weights <- FSelector::oneR(the.formula, dat)
+  oneR.vars=cutoff.k.percent(oneR.weights, cutoff.perc)
+  return(oneR.vars)
+}
+
+relief.feat.selec <- function(dat,the.formula,cutoff.perc=0.5,neighbours.count=5,sample.size=10){
+  relief.weights <- FSelector::relief(the.formula, dat, neighbours.count = neighbours.count, sample.size = sample.size)
+  relief.vars=cutoff.k.percent(relief.weights, cutoff.perc)
+  return(relief.vars)
+}
+
+combine.feat.selec <- function(cutoff.perc=0.5,feature.selected){
+  feature.selected.count=plyr::count(feature.selected)
+  setorderv(feature.selected.count, cols = "freq", order=-1)
+  keep.features=floor(nrow(feature.selected.count)*cutoff.perc)
+  combined.vars=as.character(feature.selected.count[1:keep.features,]$x)
+  return(combined.vars)
+}
+
+imputation.age.ethnicity <- function(dat.input, imput.names, seed=2019){
+  dat=copy(dat.input)
+  for (i in 1:length(imput.names)){
+    candidate=dat[!is.na(get(imput.names[i])),unique(get(imput.names[i]))]
+    num.imput=dat[is.na(get(imput.names[i])),.N]
+    set.seed(seed = seed)
+    dat[is.na(get(imput.names[i])), eval(imput.names[i]):=sample(candidate,num.imput,replace = T)]
+  }
+  return(dat)
+}
+
+```
+
+```{r load_data}
+dat.autism.child=read.arff("../Autism/Autism-Child-Data.arff")
+dat.autism.adolescent=read.arff("../Autism/Autism-Adolescent-Data.arff")
+dat.autism.adult=read.arff("../Autism/Autism-Adult-Data.arff")
+setDT(dat.autism.child)
+setDT(dat.autism.adolescent)
+setDT(dat.autism.adult)
+```
+
+```{r clean_data}
+# clean three useless columns
+dat.autism.child[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+dat.autism.adolescent[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+dat.autism.adult[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+# check if any NAs
+dat.autism.child[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+dat.autism.adolescent[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+dat.autism.adult[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+# check if any strange value. We found one age in adult has 383
+w.383=which(dat.autism.adult[,age]==383)
+dat.autism.adult=dat.autism.adult[-w.383,]
+# imputation
+dat.child.imput=imputation.age.ethnicity(dat.autism.child, imput.names = c("age","ethnicity"))
+dat.adolescent.imput=imputation.age.ethnicity(dat.autism.adolescent, imput.names = c("ethnicity"))
+dat.adult.imput=imputation.age.ethnicity(dat.autism.adult, imput.names = c("age","ethnicity"))
+# change "others" to "Others" in Adult dataset
+dat.adult.imput[ethnicity=="others", ethnicity:="Others"]
+# combine "child" and "adolescent" group
+dat.child.adolescent.combine=rbind(dat.child.imput,dat.adolescent.imput)
+# change "U.S. Outlying Islands" to "US Outlying Islands"
+w=which(dat.child.adolescent.combine$contry_of_res=="U.S. Outlying Islands")
+dat.child.adolescent.combine[w, eval("contry_of_res"):="US Outlying Islands"]
+new.lev=c(setdiff(levels(dat.child.adolescent.combine$contry_of_res),"U.S. Outlying Islands"),"US Outlying Islands")
+levels(dat.child.adolescent.combine$contry_of_res) <- new.lev
+
+```
+
+```{r feature_selection}
+the.formula=formula.eliminate.fold.class("Class/ASD",names(dat.child.adolescent.combine))
+child.adolescent.chi.square.vars=chi.square.feat.selec(dat.child.adolescent.combine,the.formula,cutoff.perc=0.5)
+child.adolescent.ig.vars=ig.feat.selec(dat.child.adolescent.combine,the.formula,cutoff.perc=0.5)
+child.adolescent.oneR.vars=oneR.feat.selec(dat.child.adolescent.combine,the.formula,cutoff.perc=0.5)
+child.adolescent.relief.vars=relief.feat.selec(dat.child.adolescent.combine,the.formula,cutoff.perc=0.5, neighbours.count=5, sample.size=10)
+child.adolescent.feature.selected=c(child.adolescent.chi.square.vars,
+                   child.adolescent.ig.vars,
+                   child.adolescent.oneR.vars,
+                   child.adolescent.relief.vars)
+child.adolescent.combined.vars=combine.feat.selec(cutoff.perc=0.5,child.adolescent.feature.selected)
+
+adult.chi.square.vars=chi.square.feat.selec(dat.adult.imput,the.formula,cutoff.perc=0.5)
+adult.ig.vars=ig.feat.selec(dat.adult.imput,the.formula,cutoff.perc=0.5)
+adult.oneR.vars=oneR.feat.selec(dat.adult.imput,the.formula,cutoff.perc=0.5)
+adult.relief.vars=relief.feat.selec(dat.adult.imput,the.formula,cutoff.perc=0.5, neighbours.count=5, sample.size=10)
+adult.feature.selected=c(adult.chi.square.vars,
+                   adult.ig.vars,
+                   adult.oneR.vars,
+                   adult.relief.vars)
+adult.combined.vars=combine.feat.selec(cutoff.perc=0.5,adult.feature.selected)
+
+```
+
+```{r knn_child_adolescent}
+# tune parameter
+temp=train.kknn(`Class/ASD`~., dat.child.adolescent.combine, kmax=20, distance=2, scale=F, kcv=10,
+                kernel = c("rectangular", "triangular", "epanechnikov","biweight","triweight",
+                           "gaussian", "rank", "optimal"))
+best.kernel=temp$best.parameters$kernel # rectangular
+best.k=temp$best.parameters$k # 4
+
+# Original (No feature selection applied)
+knn.ori.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=names(dat.child.adolescent.combine),
+                      seed=2019)
+# chi-square
+knn.chi.square.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=child.adolescent.chi.square.vars,
+                      seed=2019)
+# information gain
+knn.ig.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=child.adolescent.ig.vars,
+                      seed=2019)
+# oneR
+knn.oneR.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=child.adolescent.oneR.vars,
+                      seed=2019)
+# relief
+knn.relief.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=child.adolescent.relief.vars,
+                      seed=2019)
+# combined
+knn.combine.feat.child.adolescent.results=knn.fit(dat=dat.child.adolescent.combine, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=child.adolescent.combined.vars,
+                      seed=2019)
+```
+
+
+```{r ridge_child_adolescent}
+# Original (No feature selection applied)
+ridge.ori.child.adolescent.results<-Ridge.fit(dat=dat.child.adolescent.combine,input.names=setdiff(names(dat.child.adolescent.combine),c("Class/ASD")),seed=2019)
+# chi-square
+ridge.chi.square.child.adolescent.results=Ridge.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.chi.square.vars,seed=2019)
+# information gain
+ridge.ig.child.adolescent.results=Ridge.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.ig.vars,seed=2019)
+# oneR
+ridge.oneR.child.adolescent.results=Ridge.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.oneR.vars,seed=2019)
+# relief
+ridge.relief.child.adolescent.results=Ridge.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.relief.vars,seed=2019)
+# combined
+ridge.combine.feat.child.adolescent.results=Ridge.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.combined.vars,seed=2019)
+```
+
+
+```{r decisiontree_child_adolescent}
+# Original (No feature selection applied)
+tree.ori.child.adolescent.results<-Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=setdiff(names(dat.child.adolescent.combine),c("Class/ASD","fold")),seed=2019)
+# chi-square
+tree.chi.square.child.adolescent.results=Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.chi.square.vars,seed=2019)
+# information gain
+tree.ig.child.adolescent.results=Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.ig.vars,seed=2019)
+# oneR
+tree.oneR.child.adolescent.results=Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.oneR.vars,seed=2019)
+# relief
+tree.relief.child.adolescent.results=Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.relief.vars,seed=2019)
+# combined
+tree.combine.feat.child.adolescent.results=Decisiontree.fit(dat=dat.child.adolescent.combine,input.names=child.adolescent.combined.vars,seed=2019)
+```
+
+
+```{r knn_adult}
+# tune parameter
+temp=train.kknn(`Class/ASD`~., dat.adult.imput, kmax=20, distance=2, scale=F, kcv=10,
+                kernel = c("rectangular", "triangular", "epanechnikov","biweight","triweight",
+                           "gaussian", "rank", "optimal"))
+best.kernel=temp$best.parameters$kernel # triangular
+best.k=temp$best.parameters$k # 10
+
+# Original (No feature selection applied)
+knn.ori.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=names(dat.adult.imput),
+                      seed=2019)
+# chi-square
+knn.chi.square.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=adult.chi.square.vars,
+                      seed=2019)
+# information gain
+knn.ig.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=adult.ig.vars,
+                      seed=2019)
+# oneR
+knn.oneR.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=adult.oneR.vars,
+                      seed=2019)
+# relief
+knn.relief.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=adult.relief.vars,
+                      seed=2019)
+# combined
+knn.combine.feat.adult.results=knn.fit(dat=dat.adult.imput, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=adult.combined.vars,
+                      seed=2019)
+
+```
+
+```{r ridge_adult}
+# Original (No feature selection applied)
+ridge.ori.adult.results<-Ridge.fit(dat=dat.adult.imput,input.names=setdiff(names(dat.adult.imput),c("Class/ASD","fold")),seed=2019)
+# chi-square
+ridge.chi.square.adult.results=Ridge.fit(dat=dat.adult.imput,input.names=adult.chi.square.vars,seed=2019)
+# information gain
+ridge.ig.adult.results=Ridge.fit(dat=dat.adult.imput,input.names=adult.ig.vars,seed=2019)
+# oneR
+ridge.oneR.adult.results=Ridge.fit(dat=dat.adult.imput,input.names=adult.oneR.vars,seed=2019)
+# relief
+ridge.relief.adult.results=Ridge.fit(dat=dat.adult.imput,input.names=adult.relief.vars,seed=2019)
+# combined
+ridge.combine.feat.adult.results=Ridge.fit(dat=dat.adult.imput,input.names=adult.combined.vars,seed=2019)
+```
+
+```{r decisiontree_adult}
+# Original (No feature selection applied)
+tree.ori.adult.results<-Decisiontree.fit(dat=dat.adult.imput,input.names=setdiff(names(dat.adult.imput),c("Class/ASD","fold")),seed=2019)
+# chi-square
+tree.chi.square.adult.results=Decisiontree.fit(dat=dat.adult.imput,input.names=adult.chi.square.vars,seed=2019)
+# information gain
+tree.ig.adult.results=Decisiontree.fit(dat=dat.adult.imput,input.names=adult.ig.vars,seed=2019)
+# oneR
+tree.oneR.adult.results=Decisiontree.fit(dat=dat.adult.imput,input.names=adult.oneR.vars,seed=2019)
+# relief
+tree.relief.adult.results=Decisiontree.fit(dat=dat.adult.imput,input.names=adult.relief.vars,seed=2019)
+# combined
+tree.combine.feat.adult.results=Decisiontree.fit(dat=dat.adult.imput,input.names=adult.combined.vars,seed=2019)
+```
+
+
+```{r comparison_graph_child_adolescent}
+mean.metrics <- function(list.result){
+  acc.mean=mean(list.result[["Accuracy"]], na.rm = T)
+  sensitivity.mean=mean(list.result[["Sensitivity"]], na.rm = T)
+  return(c(acc.mean,sensitivity.mean))
+}
+
+knn.child.adolescent.metrics=rbind.data.frame(
+mean.metrics(knn.chi.square.child.adolescent.results),
+mean.metrics(knn.ig.child.adolescent.results),
+mean.metrics(knn.oneR.child.adolescent.results),
+mean.metrics(knn.relief.child.adolescent.results),
+mean.metrics(knn.combine.feat.child.adolescent.results),
+mean.metrics(knn.ori.child.adolescent.results))
+colnames(knn.child.adolescent.metrics) <- c("Accuracy","Sensitivity")
+rownames(knn.child.adolescent.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(knn.child.adolescent.metrics, ylim=0:1)
+eBar(knn.child.adolescent.metrics)
+
+
+ridge.child.adolescent.metrics=rbind.data.frame(
+mean.metrics(ridge.chi.square.child.adolescent.results),
+mean.metrics(ridge.ig.child.adolescent.results),
+mean.metrics(ridge.oneR.child.adolescent.results),
+mean.metrics(ridge.relief.child.adolescent.results),
+mean.metrics(ridge.combine.feat.child.adolescent.results),
+mean.metrics(ridge.ori.child.adolescent.results))
+colnames(ridge.child.adolescent.metrics) <- c("Accuracy","Sensitivity")
+rownames(ridge.child.adolescent.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(ridge.child.adolescent.metrics, ylim=0:1)
+eBar(ridge.child.adolescent.metrics)
+
+tree.child.adolescent.metrics=rbind.data.frame(
+mean.metrics(tree.chi.square.child.adolescent.results),
+mean.metrics(tree.ig.child.adolescent.results),
+mean.metrics(tree.oneR.child.adolescent.results),
+mean.metrics(tree.relief.child.adolescent.results),
+mean.metrics(tree.combine.feat.child.adolescent.results),
+mean.metrics(tree.ori.child.adolescent.results))
+colnames(tree.child.adolescent.metrics) <- c("Accuracy","Sensitivity")
+rownames(tree.child.adolescent.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(tree.child.adolescent.metrics, ylim=0:1)
+eBar(tree.child.adolescent.metrics)
+
+# knn - relief
+# ridge - oneR
+# tree - oneR
+#### which method should be used in ensemble model? Ridge
+# child.adolescent.ensem.method=rbind.data.frame(
+# mean.metrics(knn.relief.child.adolescent.results)
+# mean.metrics(ridge.oneR.child.adolescent.results)
+# mean.metrics(tree.oneR.child.adolescent.results)
+# )
+# colnames(child.adolescent.ensem.method) <- c("Accuracy","Sensitivity")
+# rownames(child.adolescent.ensem.method) <- c("knn - relief","ridge - relief","tree - relief")
+# eBar(child.adolescent.ensem.method)
+
+```
+
+```{r compara_graph_adult}
+knn.adult.metrics=rbind.data.frame(
+mean.metrics(knn.chi.square.adult.results),
+mean.metrics(knn.ig.adult.results),
+mean.metrics(knn.oneR.adult.results),
+mean.metrics(knn.relief.adult.results),
+mean.metrics(knn.combine.feat.adult.results),
+mean.metrics(knn.ori.adult.results))
+colnames(knn.adult.metrics) <- c("Accuracy","Sensitivity")
+rownames(knn.adult.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(knn.adult.metrics, ylim=0:1)
+eBar(knn.adult.metrics)
+
+ridge.adult.metrics=rbind.data.frame(
+mean.metrics(ridge.chi.square.adult.results),
+mean.metrics(ridge.ig.adult.results),
+mean.metrics(ridge.oneR.adult.results),
+mean.metrics(ridge.relief.adult.results),
+mean.metrics(ridge.combine.feat.adult.results),
+mean.metrics(ridge.ori.adult.results))
+colnames(ridge.adult.metrics) <- c("Accuracy","Sensitivity")
+rownames(ridge.adult.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(ridge.adult.metrics, ylim=0:1)
+eBar(ridge.adult.metrics)
+
+tree.adult.metrics=rbind.data.frame(
+mean.metrics(tree.chi.square.adult.results),
+mean.metrics(tree.ig.adult.results),
+mean.metrics(tree.oneR.adult.results),
+mean.metrics(tree.relief.adult.results),
+mean.metrics(tree.combine.feat.adult.results),
+mean.metrics(tree.ori.adult.results))
+colnames(tree.adult.metrics) <- c("Accuracy","Sensitivity")
+rownames(tree.adult.metrics) <- c("Chi Square","Information Gain","OneR","Relief","Combined","Original")
+# eBar(tree.adult.metrics, ylim=0:1)
+eBar(tree.adult.metrics)
+
+# knn - ig
+# ridge - relief
+# tree - relief
+#### which method should be used in ensemble model? Ridge
+# adult.ensem.method=rbind.data.frame(
+# mean.metrics(knn.ig.adult.results)
+# mean.metrics(ridge.relief.adult.results)
+# mean.metrics(tree.relief.adult.results)
+# )
+# colnames(adult.ensem.method) <- c("Accuracy","Sensitivity")
+# rownames(adult.ensem.method) <- c("knn - relief","ridge - combine","tree - oneR")
+# eBar(adult.ensem.method)
+
+```
+
+
+```{r ensemble_model_child_adolescent}
+# knn - relief
+# ridge - oneR
+# tree - oneR
+# Ridge as fit
+
+get.ensemble.dat <- function(dat,knn.best,logis.best,tree.best){
+  a=knn.best$Predictions
+  b=logis.best$Predictions
+  c=tree.best$Predictions
+  merge.temp1=merge(a,b,by="order.index")
+  merge.temp2=merge(merge.temp1,c,by="order.index")
+  real.label=dat[,.(`Class/ASD`)]
+  merge.final=cbind(merge.temp2,real.label)
+  return(merge.final)
+}
+
+dat.ensem.child.adolescent=get.ensemble.dat(dat.child.adolescent.combine,
+                                            knn.relief.child.adolescent.results,
+                                            ridge.oneR.child.adolescent.results,
+                                            tree.oneR.child.adolescent.results)
+ensem.child.adolescent.results=Ridge.fit(dat=dat.ensem.child.adolescent,
+                                       outcome.name="Class/ASD", input.names=names(dat.ensem.child.adolescent),
+                                       seed=2019)
+# First figure
+mean.metrics(ensem.child.adolescent.results)
+# Second figure: Ensemble model best
+four.method.comparison.child.adolescent=rbind.data.frame(
+  mean.metrics(knn.relief.child.adolescent.results),
+  mean.metrics(ridge.oneR.child.adolescent.results),
+  mean.metrics(tree.oneR.child.adolescent.results),
+  mean.metrics(ensem.child.adolescent.results))
+colnames(four.method.comparison.child.adolescent) <- c("Accuracy","Sensitivity")
+rownames(four.method.comparison.child.adolescent) <- c("knn relief","ridge oneR","tree oneR","ensemble")
+eBar(four.method.comparison.child.adolescent)
+
+# knn - ig
+# ridge - relief
+# tree - relief
+# Ridge as fit
+par(mfrow=c(1,2))
+
+dat.ensem.adult=get.ensemble.dat(dat.adult.imput,
+                                 knn.ig.adult.results,
+                                 ridge.relief.adult.results,
+                                 tree.relief.adult.results)
+ensem.adult.results=Ridge.fit(dat=dat.ensem.adult,
+                              outcome.name="Class/ASD", input.names=names(dat.ensem.adult),
+                              seed=2019)
+# First figure
+mean.metrics(ensem.adult.results)
+# Second figure: Ridge oneR best
+four.method.comparison.adult=rbind.data.frame(
+  mean.metrics(knn.ig.adult.results),
+  mean.metrics(ridge.relief.adult.results),
+  mean.metrics(tree.relief.adult.results),
+  mean.metrics(ensem.adult.results))
+colnames(four.method.comparison.adult) <- c("Accuracy","Sensitivity")
+rownames(four.method.comparison.adult) <- c("knn ig","ridge relief","tree relief","ensemble")
+eBar(four.method.comparison.adult)
+
+```
+
+
+
+
+

@@ -1,0 +1,340 @@
+---
+title: "变量选择和模型"
+author: "Yutao"
+date: "2019/4/9"
+output: html_document
+---
+
+```{r}
+library(FSelector)
+# child
+child.weights.chi.sq <- chi.squared(`Class/ASD`~., dat.autism.child)
+setorder(child.weights.chi.sq)
+# subset <- cutoff.k(child.weights.chi.sq, 9)
+# f <- as.simple.formula(subset, "Class/ASD")
+# print(f)
+child.weights.ig <- information.gain(`Class/ASD`~., dat.autism.child, unit = "log2")
+setorder(child.weights.ig)
+# subset <- cutoff.k(child.weights.ig, 9)
+
+
+# adolescent
+adolescent.weights.chi.sq <- chi.squared(`Class/ASD`~., dat.autism.adolescent)
+setorder(adolescent.weights.chi.sq)
+# subset <- cutoff.k(adolescent.weights.chi.sq, 9)
+
+adolescent.weights.ig <- information.gain(`Class/ASD`~., dat.autism.adolescent, unit = "log2")
+setorder(adolescent.weights.ig)
+# subset <- cutoff.k(child.weights.ig, 9)
+
+# adult
+adult.weights.chi.sq <- chi.squared(`Class/ASD`~., dat.autism.adult)
+setorder(adult.weights.chi.sq)
+# subset <- cutoff.k(adolescent.weights, 9)
+
+adult.weights.ig <- information.gain(`Class/ASD`~., dat.autism.adult, unit = "log2")
+setorder(adult.weights.ig)
+# subset <- cutoff.k(child.weights.ig, 9)
+
+```
+
+```{r other_methods}
+library(CORElearn)
+# 差不多诶！！！
+a=attrEval(`Class/ASD`~., dat.autism.child, estimator = "InfGain")
+a=as.data.frame(a)
+setorder(a)
+
+b=attrEval(`Class/ASD`~., dat.autism.adolescent, estimator = "InfGain")
+b=as.data.frame(b)
+setorder(b)
+
+c=attrEval(`Class/ASD`~., dat.autism.adult, estimator = "InfGain")
+c=as.data.frame(c)
+setorder(c)
+
+######################################################################
+library(Biocomb)
+aaa=select.inf.gain(as.matrix(dat.autism.child), disc.method = "MDL")
+aaa=aaa[17:1,]
+
+select.inf.chi2(as.matrix(dat.autism.child), disc.method = "MDL")
+
+```
+
+###################################
+
+# Fit model!!
+
+```{r}
+library(kknn)
+# tune parameter
+temp=train.kknn(`Class/ASD`~., dat.autism.child, kmax=20, distance=2, scale=F, kcv=10,
+                kernel = c("rectangular", "triangular", "epanechnikov","biweight","triweight",
+                           "gaussian", "rank", "optimal"))
+
+# 单次的
+set.seed(2019)
+child.mask=sample(dim(dat.autism.child)[1],0.8*dim(dat.autism.child)[1],replace=F)
+child.train=dat.autism.child[child.mask,]
+child.train.x=child.train[,-18]
+child.train.y=child.train[,18]
+child.test=dat.autism.child[-child.mask,]
+child.test.x=child.test[,-18]
+child.test.y=child.test[,18]
+
+knn.fit=kknn(`Class/ASD`~., child.train, test=child.test, 
+             kernel=temp$best.parameters$kernel, k=temp$best.parameters$k)
+knn.pred=fitted(knn.fit)
+library(caret)
+confusionMatrix(knn.pred, as.factor(as.matrix(child.test.y)))
+
+
+# ten-fold cv
+dat.child.reduce.na=dat.autism.child[-tot.na.index,]
+
+set.seed(2019)
+folds <- createFolds(y = as.factor(as.matrix(dat.child.reduce.na$`Class/ASD`)), k = 10, list = F)
+dat.child.reduce.na$fold = folds
+acc=rep(0,10)
+sensitivity=rep(0,10)
+for(i in 1:10){
+  test.mask=which(dat.child.reduce.na$fold==i)
+  child.test=dat.child.reduce.na[test.mask,]
+  child.train=dat.child.reduce.na[-test.mask,]
+  
+  knn.fit=kknn(`Class/ASD` ~ . - fold, child.train, test=child.test, 
+               kernel="triangular", k=6) ##############
+  knn.pred=fitted(knn.fit)
+  metrics=confusionMatrix(knn.pred, as.factor(as.matrix(child.test$`Class/ASD`)))
+  acc[i]=metrics[["overall"]][["Accuracy"]]
+  sensitivity[i]=metrics[["byClass"]][["Sensitivity"]]
+}
+
+
+
+```
+
+```{r}
+dat.adolescent.reduce.na=dat.autism.adolescent[-tot.na.index,]
+
+set.seed(2019)
+folds <- createFolds(y = as.factor(as.matrix(dat.adolescent.reduce.na$`Class/ASD`)), k = 10, list = F)
+dat.adolescent.reduce.na$fold = folds
+acc=rep(0,10)
+sensitivity=rep(0,10)
+for(i in 1:10){
+  test.mask=which(dat.adolescent.reduce.na$fold==i)
+  adolescent.test=dat.adolescent.reduce.na[test.mask,]
+  adolescent.train=dat.adolescent.reduce.na[-test.mask,]
+  
+  knn.fit=kknn(`Class/ASD` ~ . - fold, adolescent.train, test=adolescent.test, 
+               kernel="triangular", k=6) ##############
+  knn.pred=fitted(knn.fit)
+  metrics=confusionMatrix(knn.pred, as.factor(as.matrix(adolescent.test$`Class/ASD`)))
+  acc[i]=metrics[["overall"]][["Accuracy"]]
+  sensitivity[i]=metrics[["byClass"]][["Sensitivity"]]
+  
+}
+```
+
+
+```{r}
+dat.child.adolescent.reduce.na=rbind(dat.child.reduce.na,dat.adolescent.reduce.na)
+dat.child.adolescent.reduce.na[,.N,by=`Class/ASD`] # 健康158 病人188
+
+set.seed(2019)
+folds <- createFolds(y = as.factor(as.matrix(dat.child.adolescent.reduce.na$`Class/ASD`)), k = 10, list = F)
+dat.child.adolescent.reduce.na$fold = folds
+acc=rep(0,10)
+sensitivity=rep(0,10)
+for(i in 1:10){
+  test.mask=which(dat.child.adolescent.reduce.na$fold==i)
+  adolescent.test=dat.child.adolescent.reduce.na[test.mask,]
+  adolescent.train=dat.child.adolescent.reduce.na[-test.mask,]
+  
+  knn.fit=kknn(`Class/ASD` ~ . - fold, adolescent.train, test=adolescent.test, 
+               kernel="triangular", k=6) ##############
+  knn.pred=fitted(knn.fit)
+  metrics=confusionMatrix(knn.pred, as.factor(as.matrix(adolescent.test$`Class/ASD`)))
+  acc[i]=metrics[["overall"]][["Accuracy"]]
+  sensitivity[i]=metrics[["byClass"]][["Sensitivity"]]
+  
+}
+```
+
+
+
+
+############################
+
+# Adult
+
+```{r function}
+formula.eliminate.fold.class <- function(outcome.name, input.names){
+  input.names.delineated=setdiff(input.names,c("fold","Class/ASD"))
+  the.formula <- sprintf("`%s` ~ %s", outcome.name, paste(input.names.delineated, collapse = "+"))
+  
+  return(as.formula(the.formula))
+}
+
+knn.fit <- function(dat, kernel="triangular", k=6, outcome.name="Class/ASD", input.names, seed){
+  set.seed(seed = seed)
+  folds <- createFolds(y = dat$`Class/ASD`, k = 10, list = F)
+  dat$fold = folds
+  acc=rep(0,10)
+  sensitivity=rep(0,10)
+  all.pred=c()
+  order.index=c()
+
+  the.formula=formula.eliminate.fold.class(outcome.name, input.names)
+  
+  for(i in 1:10){
+    test.mask=which(dat$fold==i)
+    adult.test=dat[test.mask,]
+    adult.train=dat[-test.mask,]
+    
+    knn.fit=kknn(the.formula, adult.train, test=adult.test, 
+                 kernel=kernel, k=k)
+    knn.pred=fitted(knn.fit)
+    metrics=confusionMatrix(knn.pred, adult.test$`Class/ASD`)
+    acc[i]=metrics[["overall"]][["Accuracy"]]
+    sensitivity[i]=metrics[["byClass"]][["Sensitivity"]]
+    all.pred=c(all.pred,knn.pred) # Will conver to number. If levels are "YES","NO -> 1,2
+    order.index=c(order.index,test.mask)
+  }
+  all.pred=as.factor(all.pred)
+  levels(all.pred)<-c("YES","NO")
+  predictions=cbind.data.frame(order.index, all.pred)
+  list_data=list(acc,sensitivity,predictions)
+  names(list_data) <- c("Accuracy","Sensitivity","Predictions")
+  return(list_data)
+}
+```
+
+
+
+```{r adult_处理数据}
+dat.autism.adult[, eval("Class/ASD"):=factor(get("Class/ASD"), levels = c("YES","NO") )]
+
+# remove na
+age.na.index=which(is.na(dat.autism.adult$age))
+eth.na.index=which(is.na(dat.autism.adult$ethnicity))
+tot.na.index=unique(c(age.na.index,eth.na.index))  # 健康86 病人9 剪掉 #健康429 病人180
+dat.adult.reduce.na=dat.autism.adult[-tot.na.index,]
+
+# dat.adult.imput=dat.autism.adult[-tot.na.index,]
+
+# # downsampling
+# {
+# dat.adult.reduce.na[,.N, by="Class/ASD"]
+# dat.adult.yes=dat.adult.reduce.na[get("Class/ASD")=="YES",]
+# dat.adult.no=dat.adult.reduce.na[get("Class/ASD")=="NO",]
+# set.seed(666)
+# downsample.mask=sample(429,180,replace = F)
+# dat.adult.no.downsample=dat.adult.no[downsample.mask,]
+# ### 注意！！！reduce.na换了
+# dat.adult.reduce.na=rbind(dat.adult.no.downsample,dat.adult.yes)}
+
+# dat.adult.reduce.na[,.N,by=c("fold","Class/ASD")][order(fold)]
+
+## Downsampling和没有的  都还可以！
+
+```
+
+```{r adult_变量选择之后}
+# tune parameter
+temp=train.kknn(`Class/ASD`~., dat.adult.reduce.na, kmax=20, distance=2, scale=F, kcv=10,
+                kernel = c("rectangular", "triangular", "epanechnikov","biweight","triweight",
+                           "gaussian", "rank", "optimal"))
+best.kernel=temp$best.parameters$kernel
+best.k=temp$best.parameters$k
+the.formula=formula.eliminate.fold.class("Class/ASD",names(dat.adult.reduce.na))
+
+# Original (No feature selection applied)
+adult.results=knn.fit(dat=dat.adult.reduce.na, 
+                      kernel=best.kernel, k=best.k, 
+                      outcome.name="Class/ASD", input.names=names(dat.adult.reduce.na),
+                      seed=2019)
+
+library(FSelector)
+# chi-square
+adult.weights.chi.sq <- chi.squared(the.formula, dat.adult.reduce.na) # setorder(adult.weights.chi.sq)
+adult.chi.square.vars=cutoff.k.percent(adult.weights.chi.sq, 0.5)
+# fit
+adult.chi.square.results=knn.fit(dat=dat.adult.reduce.na, 
+                                 kernel=best.kernel, k=best.k, 
+                                 outcome.name="Class/ASD", input.names=adult.chi.square.vars,
+                                 seed=2019)
+
+# information gain
+adult.weights.ig <- information.gain(the.formula, dat.adult.reduce.na, unit = "log2")
+adult.ig.vars=cutoff.k.percent(adult.weights.ig, 0.5)
+# fit
+adult.ig.results=knn.fit(dat=dat.adult.reduce.na, 
+                         kernel=best.kernel, k=best.k, 
+                         outcome.name="Class/ASD", input.names=adult.ig.vars,
+                         seed=2019)
+
+# oneR
+adult.weights.oneR=oneR(the.formula, dat.adult.reduce.na)
+adult.oneR.vars=cutoff.k.percent(adult.weights.oneR, 0.5)
+# fit
+adult.oneR.results=knn.fit(dat=dat.adult.reduce.na, 
+                           kernel=best.kernel, k=best.k, 
+                           outcome.name="Class/ASD", input.names=adult.oneR.vars,
+                           seed=2019)
+
+# relief
+adult.weights.relief=relief(the.formula, dat.adult.reduce.na, neighbours.count = 5, sample.size = 10)
+adult.relief.vars=cutoff.k.percent(adult.weights.relief, 0.5)
+# fit
+adult.relief.results=knn.fit(dat=dat.adult.reduce.na, 
+                             kernel=best.kernel, k=best.k, 
+                             outcome.name="Class/ASD", input.names=adult.relief.vars,
+                             seed=2019)
+
+# find how many times features are selected in these four methods
+# a=cbind.data.frame(adult.chi.square.vars, adult.ig.vars, adult.oneR.vars, adult.relief.vars, stringsAsFactors=FALSE)
+feature.selected=c(adult.chi.square.vars, adult.ig.vars, adult.oneR.vars, adult.relief.vars)
+library(plyr)
+feature.selected.count=plyr::count(feature.selected)
+setorderv(feature.selected.count, cols = "freq", order=-1)
+# get the 50% most frequent ones
+keep.0.5.features=nrow(feature.selected.count)/2
+adult.combined.vars=as.character(feature.selected.count[1:keep.0.5.features,]$x)
+# fit
+adult.combined.results=knn.fit(dat=dat.adult.reduce.na, 
+                               kernel=best.kernel, k=best.k, 
+                               outcome.name="Class/ASD", input.names=adult.combined.vars,
+                               seed=2019)
+
+```
+
+```{r 画个图看一下}
+library(recharts)
+
+mean.metrics <- function(list.result){
+  acc.mean=mean(list.result[[1]], na.rm = T)
+  sensitivity.mean=mean(list.result[[2]], na.rm = T)
+  return(c(acc.mean,sensitivity.mean))
+}
+adult.metrics=rbind.data.frame(
+mean.metrics(adult.chi.square.results),
+mean.metrics(adult.ig.results),
+mean.metrics(adult.oneR.results),
+mean.metrics(adult.relief.results),
+mean.metrics(adult.combined.results),
+mean.metrics(adult.results))
+colnames(adult.metrics) <- c("Accuracy","Sensitivity")
+rownames(adult.metrics) <- c("Chi Square","Information Gain","OneR","ReliefF","Combined","Original")
+
+
+eBar(adult.metrics, ylim=0:1)
+eBar(adult.metrics)
+
+
+```
+
+
+

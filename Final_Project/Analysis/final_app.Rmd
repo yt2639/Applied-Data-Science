@@ -1,0 +1,436 @@
+---
+title: "Austim App"
+author: ""
+output: flexdashboard::flex_dashboard
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+library(flexdashboard)
+library(shiny)
+library(rmarkdown)
+library(knitr)
+library(Hmisc)
+# library(dplyr)
+library(RWeka)
+library(data.table)
+library(DT)
+library(FSelector)
+library(kknn)
+library(caret)
+library(plyr)
+library(recharts)
+library(glmnet)
+library(C50)
+library(ggplot2)
+
+assignInNamespace(x = "cedta.override", value = c(data.table:::cedta.override,"rmarkdown"), ns = "data.table")
+opts_chunk$set(echo = FALSE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55), tidy = TRUE)
+```
+
+```{r constants}
+id.name <- "id"
+A1_Score.name <- "A1_Score"    
+A2_Score.name <- "A2_Score"
+A3_Score.name <- "A3_Score"
+A4_Score.name <- "A4_Score"
+A5_Score.name <- "A5_Score"
+A6_Score.name <- "A6_Score"
+A7_Score.name <- "A7_Score"
+A8_Score.name <- "A8_Score"
+A9_Score.name <- "A9_Score"
+A10_Score.name <- "A10_Score"
+age.name <- "age"
+gender.name <- "gender"
+ethnicity.name <- "ethnicity"
+jundice.name <- "jundice"
+austim.name <- "austim" 
+contry_of_res.name <- "contry_of_res"  
+used_app_before.name <- "used_app_before"
+result.name <- "result"
+age_desc.name <- "age_desc"
+relation.name <- "relation"
+Class.ASD.name <- "Class/ASD"
+categorical.variable <- c(age.name, gender.name, ethnicity.name, jundice.name, austim.name, used_app_before.name, Class.ASD.name)
+categorical.variable.byclass <- c(age.name, gender.name, ethnicity.name, jundice.name, austim.name, used_app_before.name)
+numeric.variable <- c(A1_Score.name, A2_Score.name, A3_Score.name, A4_Score.name, A5_Score.name, A6_Score.name, A7_Score.name, A8_Score.name, A9_Score.name, A10_Score.name)
+data.name <- c("dat.child.imput", "dat.adolescent.imput","dat.adult.imput", "dat.child.adolescent.combine")
+```
+
+```{r functions}
+formula.eliminate.fold.class <- function(outcome.name, input.names){
+  input.names.delineated=setdiff(input.names,c("fold","Class/ASD","order.index"))
+  the.formula <- sprintf("`%s` ~ %s", outcome.name, paste(input.names.delineated, collapse = "+"))
+  
+  return(as.formula(the.formula))
+}
+
+oneR.feat.selec <- function(dat,the.formula,cutoff.perc=0.5){
+  oneR.weights <- FSelector::oneR(the.formula, dat)
+  oneR.vars=cutoff.k.percent(oneR.weights, cutoff.perc)
+  return(oneR.vars)
+}
+
+imputation.age.ethnicity <- function(dat.input, imput.names, seed=2019){
+  dat=copy(dat.input)
+  for (i in 1:length(imput.names)){
+    candidate=dat[!is.na(get(imput.names[i])),unique(get(imput.names[i]))]
+    num.imput=dat[is.na(get(imput.names[i])),.N]
+    set.seed(seed = seed)
+    dat[is.na(get(imput.names[i])), eval(imput.names[i]):=sample(candidate,num.imput,replace = T)]
+  }
+  return(dat)
+}
+
+Ridge.single.test.fit <- function(dat,test,outcome.name="Class/ASD",input.names){
+  train.real<-subset(dat,select =input.names)
+  test.real<-subset(test,select =input.names)
+  train.mat<-as.matrix(as.data.frame(lapply(train.real, as.numeric)))
+  test.mat<-as.matrix(as.data.frame(lapply(test.real, as.numeric)))
+  mod.cv<-cv.glmnet(x = train.mat, y = dat$`Class/ASD`, family = "binomial",alpha =0)
+  pred <- predict(object = mod.cv, newx =test.mat, type = "class", s = mod.cv$lambda.min) 
+  # pred=factor(pred, levels=c("YES","NO"))
+  return(pred)
+}
+
+# change.user.input.to.desired.form
+child.adolescent.change.user.input.to.desired.form <- function(dat,
+                                                               country.levels=levels(dat.child.adolescent.combine$contry_of_res)){
+  dat.names=c("A3_Score", "A4_Score", "A5_Score", "A6_Score", "A8_Score", "A9_Score", "A10_Score", "contry_of_res")
+  colnames(dat)<-dat.names
+  for (i in 1:7){
+    dat[,eval(dat.names[i]):=factor(get(dat.names[i]), levels=c("0","1"))]
+  }
+  dat[,eval(dat.names[8]):=factor(get(dat.names[8]), levels=country.levels)]
+}
+
+adult.change.user.input.to.desired.form <- function(dat,
+                                                    country.levels=levels(dat.adult.imput$contry_of_res)){
+  dat.names=c("A1_Score", "A2_Score", "A3_Score", "A5_Score", "A6_Score", "A9_Score", "contry_of_res", "used_app_before")
+  colnames(dat)<-dat.names
+  for (i in 1:6){
+    dat[,eval(dat.names[i]):=factor(get(dat.names[i]), levels=c("0","1"))]
+  }
+  dat[,eval(dat.names[7]):=factor(get(dat.names[7]), levels=country.levels)]
+  dat[,eval(dat.names[8]):=factor(get(dat.names[8]), levels=c("no","yes"))]
+}
+
+distribution.age <- function(data, col.name){
+  dat <- data[,c(col.name), with = FALSE]
+  value <- unlist(dat[,c(col.name), with = FALSE])
+  #dat <- within(dat,value <- factor(value,levels=names(sort(table(value),decreasing=TRUE))))
+  category <- factor((value))
+  ggplot(data = dat,mapping = aes(x = value,fill = category))+ geom_bar()+geom_text(stat="count" ,aes(label=..count..), vjust=-0.1)
+  
+}
+
+distribution.character <- function(data, col.name){
+  dat <- data[,c(col.name), with = FALSE]
+  value <- unlist(dat[,c(col.name), with = FALSE])
+  dat <- within(dat,value <-         factor(value,levels=names(sort(table(value),decreasing=TRUE))))
+  category <- factor(as.character(value))
+  ggplot(data = dat,mapping = aes(x = value,fill = category))+ geom_bar()+geom_text(stat="count" ,aes(label=..count..), vjust=-0.1)
+}
+
+distribution.class.age <- function(data, col.name){
+  dat <- data[,c(col.name, Class.ASD.name), with = FALSE, by = Class.ASD.name]
+  value <- unlist(dat[,c(col.name), with = FALSE])
+  #dat <- within(dat,value <- factor(value,levels=names(sort(table(value),decreasing=TRUE))))
+  category <- factor((value))
+  labs <- c("NO" = "Healthy People", "YES"="Patient")
+  ggplot(data = dat,mapping = aes(x = value,fill = category))+ geom_bar()+ facet_grid(~`Class/ASD`, labeller = labeller(`Class/ASD` = labs))+geom_text(stat="count" ,aes(label=..count..), vjust=-0.1)#+ theme(axis.text.x=element_blank())
+}
+
+distribution.class.character <- function(data, col.name){
+  dat <- data[,c(col.name, Class.ASD.name), with = FALSE, by = Class.ASD.name]
+  value <- unlist(dat[,c(col.name), with = FALSE])
+  #dat <- within(dat,value <- factor(value,levels=names(sort(table(value),decreasing=TRUE))))
+  category <- factor(as.character((value)))
+  labs <- c("NO" = "Healthy People", "YES"="Patient")
+  ggplot(data = dat,mapping = aes(x = value,fill = category))+ geom_bar()+ facet_grid(~`Class/ASD`, labeller = labeller(`Class/ASD` = labs))+geom_text(stat="count" ,aes(label=..count..), vjust=-0.1)#+ theme(axis.text.x=element_blank())
+}
+
+radar.plot <- function(data){
+  health <- data[get(Class.ASD.name) == "NO", c(numeric.variable), with = FALSE]
+  patient <- data[get(Class.ASD.name) == "YES",c(numeric.variable), with = FALSE]
+  health<- lapply(health, function(x) as.numeric(as.character(x)))
+  score.health <-  lapply(health, sum)
+  patient<- lapply(patient, function(x) as.numeric(as.character(x)))
+  score.patient <-  lapply(patient, sum)
+  data.overall <- rbind(unlist(score.health),unlist(score.patient))
+  rownames(data.overall) <- c("health", "patient")
+  return(eRadar(data.overall, ymax = rep(nrow(data),10)))
+}
+```
+
+
+```{r read_data, include=FALSE, eval = T}
+setwd("~/Documents/STAT4243_ADS/Final_Project/Analysis")
+dat.autism.child=read.arff("../Autism/Autism-Child-Data.arff")
+dat.autism.adolescent=read.arff("../Autism/Autism-Adolescent-Data.arff")
+dat.autism.adult=read.arff("../Autism/Autism-Adult-Data.arff")
+setDT(dat.autism.child)
+setDT(dat.autism.adolescent)
+setDT(dat.autism.adult)
+```
+
+```{r clean_data}
+# clean three useless columns
+dat.autism.child[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+dat.autism.adolescent[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+dat.autism.adult[,c("result","age_desc","relation"):=list(NULL,NULL,NULL)]
+# check if any NAs
+# dat.autism.child[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+# dat.autism.adolescent[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+# dat.autism.adult[,lapply(.SD, FUN = function(x){return(sum(is.na(x)))})]
+# check if any strange value. We found one age in adult has 383
+w.383=which(dat.autism.adult[,age]==383)
+dat.autism.adult=dat.autism.adult[-w.383,]
+# imputation
+dat.child.imput=imputation.age.ethnicity(dat.autism.child, imput.names = c("age","ethnicity"))
+dat.adolescent.imput=imputation.age.ethnicity(dat.autism.adolescent, imput.names = c("ethnicity"))
+dat.adult.imput=imputation.age.ethnicity(dat.autism.adult, imput.names = c("age","ethnicity"))
+# change "others" to "Others" in Adult dataset
+dat.adult.imput[ethnicity=="others", ethnicity:="Others"]
+# combine "child" and "adolescent" group
+dat.child.adolescent.combine=rbind(dat.child.imput,dat.adolescent.imput)
+# change "U.S. Outlying Islands" to "US Outlying Islands"
+w=which(dat.child.adolescent.combine$contry_of_res=="U.S. Outlying Islands")
+dat.child.adolescent.combine[w, eval("contry_of_res"):="US Outlying Islands"]
+new.lev=c(setdiff(levels(dat.child.adolescent.combine$contry_of_res),"U.S. Outlying Islands"),"US Outlying Islands")
+levels(dat.child.adolescent.combine$contry_of_res) <- new.lev
+
+```
+
+```{r feature_selection}
+the.formula=formula.eliminate.fold.class("Class/ASD",names(dat.child.adolescent.combine))
+### which method is used to predict? Ridge oneR
+child.adolescent.oneR.vars=oneR.feat.selec(dat.child.adolescent.combine,the.formula,cutoff.perc=0.5)
+### which method is used to predict? Ridge oneR
+adult.oneR.vars=oneR.feat.selec(dat.adult.imput,the.formula,cutoff.perc=0.5)
+
+```
+
+Introduction
+=====================================  
+<br>
+<br>
+<br>
+<br>
+<h3 style="color:#287FE3"><p style="text-align:center;font-family:garamond;">  **This app is designed to help participants pre-diagnose ASD.**</p></h3>
+<br>
+<h4 style="color:#287FE3"><p style="text-align:justify;font-family:garamond;line-height:150%"> ***Autism Spectrum Disorder (ASD)* is a neurodevelopment disorder associated with limitations in social interactions, communication, and behavior. It is primarily diagnosed using variables related to behavior, such as social interaction, play and imagination, repetitive behaviors, and communication among others.**</p></h4>
+<br>
+<h3 style="color:#287FE3"><font face="garamond">**Here is a brief description of each section in this App:**</font></h3>
+
+<h4 style="color:#287FE3"><font face="garamond">**General Distribution: **Showing the distribution of different features in three datasets.</font></h4>
+
+<h4 style="color:#287FE3"><font face="garamond">**Distribution for Country of Residence: **Showing the worldwide distribution of residence in three datasets and combined dataset.</font></h4>
+
+<h4 style="color:#287FE3"><font face="garamond">**Distribution by Class: **Showing the distribution of features among healthy people and patients seperately.</font></h4>
+
+<h4 style="color:#287FE3"><font face="garamond">**Distribution for Score:**Showing overal score result per class label.</font></h4>
+
+<h4 style="color:#287FE3"><font face="garamond">**Questionnaire: **Designed Questionnaire based on feature selection methods.</font></h4>
+<br>
+<h4 style="color:#287FE3"><font face="garamond">**We hope participants have the chance to know more about ASD and the data received from respondents could be used for future development of tools for diagnosing ASD.**</font></h4>
+
+
+General Distribution
+===================================
+
+Row {data-height=1000}
+-------------------------------------
+```{r general}
+inputPanel(
+  selectInput(inputId="data.g", label = "Select Data:", choices = data.name, selected = data.name[1]),
+  selectInput(inputId="respondent_variable.g", label = "Select Variable:", choices = categorical.variable, selected = categorical.variable[1])
+)
+
+renderPlot({
+  data <- get(input$data.g)
+  if (input$respondent_variable.g != "age"){
+    general.distribution <- distribution.character(data, input$respondent_variable.g)
+    return(general.distribution)
+  }
+  if (input$respondent_variable.g == "age"){
+    general.distribution <- distribution.age(data, input$respondent_variable.g)
+    return(general.distribution)
+  }
+})
+
+```
+
+Distribution for Country of Residence
+=====================================  
+
+Row {data-height=1000}
+-------------------------------------
+```{r for Country of Residence}
+inputPanel(
+  selectInput(inputId="data.cor", label = "Select Data:", choices = c(data.name), selected = data.name[1])
+)
+renderEChart({
+    dat<- get(input$data.cor)
+    dat <- dat[,.N,by="contry_of_res"]
+    map <- eMap(dat, namevar=~contry_of_res, datavar=~N, region="world",color=c("#C23531","#F8E0E0"),showLabel=F,title="Distribution for Country of Residence")
+    map$dependencies <- NULL
+   return(map)
+})
+```
+
+Distribution by Class
+=====================================  
+
+Row {data-height=1000}
+-------------------------------------
+```{r by class}
+inputPanel(
+  selectInput(inputId="data.bc", label = "Select Data:", choices = data.name, selected = data.name[1]),
+  selectInput(inputId="respondent_variable.bc", label = "Select Variable:", choices = categorical.variable.byclass, selected = categorical.variable[1])
+)
+
+
+renderPlot({
+  data <- get(input$data.bc)
+  if (input$respondent_variable.bc != "age"){
+    distribution.byclass <- distribution.class.character(data, input$respondent_variable.bc)
+    return(distribution.byclass)
+  }
+  if (input$respondent_variable.bc == "age"){
+     distribution.byclass <- distribution.class.age(data, input$respondent_variable.bc)
+    return(distribution.byclass)
+   }
+  
+})
+```
+
+Distribution for Score
+===================================== 
+
+Row {data-height=1000}
+-------------------------------------
+```{r for score}
+inputPanel(
+  selectInput(inputId="data.score", label = "Select Data:", choices = c(data.name), selected = data.name[1])
+)
+renderEChart({
+  dat<- get(input$data.score)
+  result<- radar.plot(dat)
+  result$dependencies <- NULL
+  return(result)
+})
+```
+
+
+Questionnaire (Child, Adolescent & Adult)
+=====================================  
+
+
+```{r example}
+ui <- fluidPage(
+  sidebarPanel(
+radioButtons('age_group', h3(strong("Age Group:")),
+                        choices = list("Child (4-11yrs)" = "3", 
+                                       "Adolescent (12-16yrs)" = "2",
+                                       "Adult (>16yrs)" = "1"),
+                        selected = "3",inline=TRUE),
+ # only show this panel if the age_group is "Adult"
+conditionalPanel(
+             condition = "input.age_group == '1'", 
+             radioButtons('q11', h5(strong("Question1. I often notice small sounds when others do not.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             radioButtons('q12', h5(strong("Question2. I usually concentrate more on the whole picture rather than the small details.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q13', h5(strong("Question3. I find it easy to do more than one thing at once.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q15', h5(strong("Question5. I find it easy to ‘read between the lines’ when someone is talking to me.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q16', h5(strong("Question6. I know how to tell if someone listening to me is getting bored.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q19', h5(strong("Question9. I find it easy to work out what someone is thinking or feeling just by looking at their face.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             selectInput(inputId="q1_country", label="Country of residence", choices = unique(dat.adult.imput$contry_of_res), selected=NULL),
+             radioButtons('q1_used', h5(strong("Used online app before?")),choices = list("Yes" = "yes", "No" = "no"),selected = "no",inline=TRUE)
+             ),
+          
+ # only show this panel if the age_group is "Adolescent"
+conditionalPanel(
+             condition = "input.age_group == '2'", 
+             radioButtons('q23', h5(strong("Question3. In a social group, s/he can easily keep track of several different people’s conversations.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q24', h5(strong("Question4. If there is an interruption, s/he can switch back to what s/he was doing very quickly.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q25', h5(strong("Question5. S/he frequently finds that s/he doesn’t know how to keep a conversation going.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             radioButtons('q26', h5(strong("Question6. S/he is good at social chit-chat.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q28', h5(strong("Question8. S/he finds it difficult to imagine what it would be like to be someone else.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             radioButtons('q29', h5(strong("Question9. S/he finds social situations easy.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q210', h5(strong("Question10. S/he finds it hard to make new friends.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             selectInput(inputId="q2_country", label="Country of residence", choices = unique(dat.child.adolescent.combine$contry_of_res), selected=NULL)
+             ),
+
+ # only show this panel if the age_group is "child"
+conditionalPanel(
+             condition = "input.age_group == '3'", 
+             radioButtons('q33', h5(strong("Question3. In a social group, s/he can easily keep track of several different people's conversations.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q34', h5(strong("Question4. S/he finds it easy to go back and forth between different activities.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q35', h5(strong("Question5. S/he doesn’t know how to keep a conversation going with his/her peers.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             radioButtons('q36', h5(strong("Question6. S/he is good at social chit-chat.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q38', h5(strong("Question8. When s/he was in preschool, s/he used to enjoy playing pretending games with other children.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q39', h5(strong("Question9. S/he finds it easy to work out what someone is thinking or feeling just by looking at their face.")),choices = list("Agree" = 0, "Disagree" = 1),selected = 1,inline=TRUE),
+             radioButtons('q310', h5(strong("Question10. S/he finds it hard to make new friends.")),choices = list("Agree" = 1, "Disagree" = 0),selected = 1,inline=TRUE),
+             selectInput(inputId="q3_country", label="Country of residence", choices = unique(dat.child.adolescent.combine$contry_of_res), selected=NULL)
+),
+
+actionButton("go", "Submit")
+
+),
+
+    mainPanel(
+      h4(strong("Your preliminary diagnosis:")),
+      verbatimTextOutput("plot")))
+
+server <- function(input, output) {
+    output$plot <- renderPrint({
+
+ntext <- eventReactive(input$go, {
+      if (input$age_group == "3"){
+        user.input.child=cbind(input$q33,input$q34,input$q35,input$q36,input$q38,input$q39,input$q310,input$q3_country)
+        user.input.child=as.data.table(user.input.child)
+        child.test=child.adolescent.change.user.input.to.desired.form(dat=user.input.child,
+                                                           country.levels=levels(dat.child.adolescent.combine$contry_of_res))
+        child.pred=Ridge.single.test.fit(dat=dat.child.adolescent.combine, test=child.test,
+                                         outcome.name="Class/ASD",input.names=child.adolescent.oneR.vars)
+        if (child.pred=="YES"){cat("We regret to inform you that you might have Autism. Please go to a nearby hospital for cliincal diagnosis and medical treatment as soon as possible.")}
+        else {cat("Congratulations!! You don't have Autism ^_^. Wish you good health!")}
+      }
+      else if(input$age_group == "2"){
+        user.input.adolescent=cbind(input$q23,input$q24,input$q25,input$q26,input$q28,input$q29,input$q210,input$q2_country)
+        user.input.adolescent=as.data.table(user.input.adolescent)
+        adolescent.test=child.adolescent.change.user.input.to.desired.form(dat=user.input.adolescent,
+                                                           country.levels=levels(dat.child.adolescent.combine$contry_of_res))
+        adolescent.pred=Ridge.single.test.fit(dat=dat.child.adolescent.combine, test=adolescent.test,
+                                         outcome.name="Class/ASD",input.names=child.adolescent.oneR.vars)
+        
+        if (adolescent.pred=="YES"){cat("We regret to inform you that you might have Autism. Please go to a nearby hospital for cliincal diagnosis and medical treatment as soon as possible.")}
+        else {cat("Congratulations!! You don't have Autism ^_^. Wish you good health!")}
+        
+        
+      }
+      else{
+        user.input.adult=cbind(input$q11,input$q12,input$q13,input$q15,input$q16,input$q19,input$q1_country,input$q1_used)
+        user.input.adult=as.data.table(user.input.adult)
+        adult.test=adult.change.user.input.to.desired.form(dat=user.input.adult,
+                                                           country.levels=levels(dat.adult.imput$contry_of_res))
+        adult.pred=Ridge.single.test.fit(dat=dat.adult.imput, test=adult.test,
+                                         outcome.name="Class/ASD",input.names=adult.oneR.vars)
+        
+        if (adult.pred=="YES"){cat("We regret to inform you that you might have Autism. Please go to a nearby hospital for cliincal diagnosis and medical treatment as soon as possible.")}
+        else {cat("Congratulations!! You don't have Autism ^_^. Wish you good health!")}
+        
+      }
+})
+        ntext()
+
+      
+        })}
+shinyApp(ui, server)
+
+```
+
+
+
+
